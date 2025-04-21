@@ -204,4 +204,181 @@ ____
 ### *Пояснення*
 Перший етап виділення памʼяті пройшов успішно, що є очевидним, адже 10 - "адекватний" розмір для подібної операції. Під час "перевиділення" памʼяті ми задали надзвичайно великий параметр, що спричинило порушення роботи програми, про що нам каже стрічка "step 2 -> realloc failed;"
 
+## Завдання 6
+
+### Текст завдання
+Якщо realloc(3) викликати з NULL або розміром 0, що станеться? Напишіть тестовий випадок.
+____
+### *Реалізація*
+```
+#include <stdio.h>
+#include <stdlib.h>
+
+int main() {
+    void *ptr1 = realloc(NULL, 100); 
+    void *ptr2 = realloc(ptr1, 0);   
+
+    printf("ptr1 address -> %p\n", ptr1);
+    printf("ptr2 address -> %p\n", ptr2); 
+
+    return 0;
+}
+```
+>$ gcc task6.c -o t6
+>
+>$ /t6
+>
+>ptr1 address -> 0x56ed36ee82a0
+>
+>ptr2 address -> (nil)
+
+____
+### *Пояснення*
+По факту, realloc(NULL, 100) спрацювало як malloc, бо ми "на рівному місці" виділили памʼять.А realloc(ptr1, 0) - виділення 0 комірок. А як ми памʼятаємо із завдання 3, таке можливо.
+
+## Завдання 7
+
+### Текст завдання
+Перепишіть наступний код, використовуючи reallocarray(3):
+struct sbar *ptr, *newptr;
+ptr = calloc(1000, sizeof(struct sbar));
+newptr = realloc(ptr, 500*sizeof(struct sbar));
+____
+### *Реалізація*
+```
+#include <stdlib.h>
+#include <stdio.h>
+#include <malloc.h> 
+struct sbar {
+    int a;
+    char b;
+};
+
+int main() {
+    struct sbar *ptr = calloc(1000, sizeof(struct sbar));
+    struct sbar *newptr = reallocarray(ptr, 500, sizeof(struct sbar));
+    if (!newptr) {
+        printf("reallocarray\n");
+        free(ptr);
+        return 1;
+    }
+    printf("new pointer address -> %p \n", newptr);
+    free(newptr);
+    return 0;
+}
+```
+>$ gcc task7.c -o t7
+>
+>$ /t7
+>
+>new pointer address -> 0x6287752102a0
+
+____
+### *Пояснення*
+Логіка полягає у тому, що кщо reallocarray не змогла виділити нову пам’ять, виводиться помилка, і стару пам’ять звільняють.У разі успіху стара пам’ять копіюється в нову область, і стара звільняється автоматично.
+
+Судячи з повідомлення про адресу вказівника, програма була виконана успішно, тому що  reallocarray() вважається безпечнішою за realloc() — особливо в контексті захисту від переповнення цілого числа при множенні, бо reallocarray перевіряє переповнення перед виділенням памʼяті.
+
+## Завдання 8
+
+### Текст завдання
+Напишіть кастомний memory allocator на базі freelist.
+____
+### *Реалізація*
+```
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+
+#define BLOCK_SIZE 64      
+#define POOL_SIZE  1024    
+
+typedef struct FreeBlock {
+    struct FreeBlock* next;
+} FreeBlock;
+
+typedef struct {
+    uint8_t* memory_pool;   
+    FreeBlock* free_list;   
+    size_t block_size;
+    size_t total_blocks;
+} Allocator;
+
+void allocator_init(Allocator* allocator, size_t block_size, size_t pool_size) {
+    allocator->block_size = block_size;
+    allocator->total_blocks = pool_size / block_size;
+    allocator->memory_pool = malloc(pool_size);
+
+    if (!allocator->memory_pool) {
+        printf("malloc");
+        exit(1);
+    }
+    allocator->free_list = NULL;
+    for (size_t i = 0; i < allocator->total_blocks; i++) {
+        FreeBlock* block = (FreeBlock*)(allocator->memory_pool + i * block_size);
+        block->next = allocator->free_list;
+        allocator->free_list = block;
+    }
+}
+
+void* allocate(Allocator* allocator) {
+    if (!allocator->free_list) {
+        return NULL;  // Пам’ять закінчилася
+    }
+
+    FreeBlock* block = allocator->free_list;
+    allocator->free_list = block->next;
+    return (void*)block;
+}
+
+void deallocate(Allocator* allocator, void* ptr) {
+    if (!ptr) return;
+    FreeBlock* block = (FreeBlock*)ptr;
+    block->next = allocator->free_list;
+    allocator->free_list = block;
+}
+
+void allocator_destroy(Allocator* allocator) {
+    free(allocator->memory_pool);
+    allocator->memory_pool = NULL;
+    allocator->free_list = NULL;
+}
+int main() {
+    Allocator allocator;
+    allocator_init(&allocator, BLOCK_SIZE, POOL_SIZE);
+
+    void* ptr1 = allocate(&allocator);
+    void* ptr2 = allocate(&allocator);
+
+    printf("Allocated block at %p\n", ptr1);
+    printf("Allocated block at %p\n", ptr2);
+
+    deallocate(&allocator, ptr1);
+    deallocate(&allocator, ptr2);
+
+    void* ptr3 = allocate(&allocator); // reuse!
+    printf("Reused block at %p\n", ptr3);
+
+    allocator_destroy(&allocator);
+    return 0;
+}
+```
+
+
+>$ gcc task8.c -o t8
+>
+>$ ./t8
+>
+>Allocated block at 0x5cff75654660
+>
+>Allocated block at 0x5cff75654620
+>
+>Reused block at 0x5cff75654620
+
+
+
+____
+### *Пояснення*
+У цьому завданні ми реалізували власний менеджер пам’яті — простий аллокатор на основі списку вільних блоків, або freelist. Ідея полягає в тому, щоб заздалегідь виділити великий шматок пам’яті, розбити його на менші блоки однакового розміру і керувати ними вручну. Для цього ми створюємо однозв’язний список вільних блоків: кожен вільний блок містить вказівник на наступний. Коли потрібно виділити пам’ять, ми просто забираємо блок з початку списку. Коли пам’ять більше не потрібна, ми повертаємо блок назад у список. Це дозволяє дуже швидко розподіляти і звільняти пам’ять без викликів malloc і free кожного разу.
 
